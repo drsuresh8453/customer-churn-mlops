@@ -128,7 +128,7 @@ def train_models(X_train, X_test, y_train, y_test):
     if LGB_AVAILABLE:
         print("\nTraining LightGBM...")
         lgbm = lgb.LGBMClassifier(
-            n_estimators=300, max_depth=6, learning_rate=0.08,
+            n_estimators=300, max_depth=8, learning_rate=0.08,
             num_leaves=50, subsample=0.8, colsample_bytree=0.8,
             class_weight='balanced', random_state=42, verbose=-1
         )
