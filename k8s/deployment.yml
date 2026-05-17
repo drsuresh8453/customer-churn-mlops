@@ -24,7 +24,7 @@ spec:
     spec:
       containers:
       - name: customer-churn-app
-        image: ACCOUNT_ID.dkr.ecr.ap-south-1.amazonaws.com/customer-churn:latest
+        image: 968603941077.dkr.ecr.ap-south-1.amazonaws.com/customer-churn:latest
         ports:
         - containerPort: 8501
         - containerPort: 8000
