@@ -1,0 +1,107 @@
+# .github/workflows/mlops_pipeline.yml
+# Customer Churn MLOps CI/CD Pipeline
+# Author: Suresh D R | DV Analytics
+
+name: Customer Churn MLOps Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION      : ap-south-1
+  ECR_REPOSITORY  : customer-churn
+  EKS_CLUSTER_NAME: customer-churn-cluster
+  S3_BUCKET       : customer-churn-project-2024
+
+jobs:
+
+  test:
+    name: Run 8 Automated Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+    - run: pip install -r requirements.txt
+    - name: Run tests
+      env:
+        AWS_ACCESS_KEY_ID    : ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION           : ${{ env.AWS_REGION }}
+        S3_BUCKET            : ${{ env.S3_BUCKET }}
+      run: pytest tests/test_model.py -v --tb=short
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: pytest-results.xml
+
+  build-and-push:
+    name: Build and Push Docker
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id    : ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region           : ${{ env.AWS_REGION }}
+    - id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+    - name: Build and push
+      id: build
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG   : ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+  deploy:
+    name: Deploy to EKS
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+    steps:
+    - uses: actions/checkout@v4
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id    : ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region           : ${{ env.AWS_REGION }}
+    - name: Update kubeconfig
+      run: aws eks update-kubeconfig --region $AWS_REGION --name $EKS_CLUSTER_NAME
+    - name: Replace ACCOUNT_ID
+      run: |
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        sed -i "s/ACCOUNT_ID/$ACCOUNT_ID/g" k8s/deployment.yml
+    - name: Create AWS secrets in K8s
+      run: |
+        kubectl create secret generic aws-secrets \
+          --from-literal=aws-access-key-id=${{ secrets.AWS_ACCESS_KEY_ID }} \
+          --from-literal=aws-secret-access-key=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+          --dry-run=client -o yaml | kubectl apply -f -
+    - name: Deploy
+      run: |
+        kubectl apply -f k8s/deployment.yml
+        kubectl set image deployment/customer-churn-app \
+          customer-churn-app=${{ needs.build-and-push.outputs.image }}
+        kubectl rollout status deployment/customer-churn-app --timeout=300s
+    - name: Show URL
+      run: |
+        echo "App URL:"
+        kubectl get service customer-churn-service

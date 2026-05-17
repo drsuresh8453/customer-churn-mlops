@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+venv/
+.env
+models/*.pkl
+data/reference/*.csv
+data/current/*.csv
+reports/*.html
+*.log
+.DS_Store
+mlruns/
+.pytest_cache/
